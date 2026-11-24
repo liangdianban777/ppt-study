@@ -21,12 +21,12 @@ export const SlidePage = memo(function SlidePage({ page, active, title, example,
   return (
     <section data-page={page} className={`page-section${active ? ' active' : ''}`} style={{ '--slide-ratio': ratio } as CSSProperties} aria-current={active ? 'page' : undefined}>
       <div className="slide-card">
+        <p className="slide-meta"><span>第 {page} 页</span>{title ? <span>{title}</span> : null}</p>
         <div className="slide-stage" style={{ aspectRatio: ratio }}>
           {example ? <ExampleSlide item={example} /> : null}
           {preview && pdfPage ? <PdfPreview item={pdfPage} page={page} /> : null}
           {preview && deck?.format === 'pptx' ? <PptxPreview deck={deck} page={page} onNavigate={onNavigate} /> : null}
         </div>
-        <p className="slide-meta"><span>第 {page} 页</span>{title ? <span>{title}</span> : null}</p>
       </div>
     </section>
   )

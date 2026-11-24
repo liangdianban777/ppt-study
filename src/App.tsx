@@ -1,12 +1,12 @@
 import { memo, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, ClipboardEvent, KeyboardEvent, PointerEvent, ReactNode } from 'react'
+import type { ChangeEvent, ClipboardEvent, KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react'
 import { SlidePage } from './slides'
 import { loadDeck, useVisibleSlides } from './deck'
 import type { Deck } from './deck'
 import { examples, parseNotes, prompt, renderMarkdown } from './study-content'
 import type { Note } from './study-content'
 import { usePageSync } from './use-page-sync'
-import { addWorkspace, deleteWorkspace, openWorkspaceDatabase, readWorkspaces, updateWorkspace } from './workspace-storage'
+import { addWorkspace, openWorkspaceDatabase, readWorkspaces, updateWorkspace } from './workspace-storage'
 import type { Workspace, WorkspacePpt } from './workspace-storage'
 
 const demoNotes = new Map(examples.map((example, index) => [index + 1, example]))
@@ -18,8 +18,8 @@ const icons = {
   upload: 'M12 16V3m-5 5 5-5 5 5M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3',
   left: 'm15 6-6 6 6 6',
   right: 'm9 6 6 6-6 6',
+  down: 'm6 9 6 6 6-6',
   close: 'm6 6 12 12M18 6 6 18',
-  folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z',
   plus: 'M12 5v14M5 12h14',
   check: 'm5 12 4 4L19 6',
   toolbar: 'M4 6h16M4 11h16M4 16h10',
@@ -27,6 +27,26 @@ const icons = {
 
 function Icon({ name }: { name: keyof typeof icons }) {
   return <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={icons[name]} /></svg>
+}
+
+function ThemeSelect() {
+  const root = document.documentElement
+
+  return (
+    <select className="theme-select" aria-label="界面主题" title="界面主题" defaultValue={root.dataset.theme ?? 'system'} onChange={event => {
+      const theme = event.currentTarget.value
+      root.dataset.theme = theme
+      try {
+        localStorage.setItem('ppt-study:theme', theme)
+      } catch (error) {
+        console.warn('无法保存主题偏好', error)
+      }
+    }}>
+      <option value="system">跟随系统</option>
+      <option value="light">浅色</option>
+      <option value="dark">深色</option>
+    </select>
+  )
 }
 
 export default function App() {
@@ -62,6 +82,7 @@ export default function App() {
 }
 
 type DeckPreview = { pptId: string; deck: Deck | null; error: string }
+type WorkspaceOperation = 'import' | 'save' | 'switch'
 
 function disposeDeck(deck: Deck | null | undefined) {
   if (deck?.format === 'pdf') void deck.destroy().catch(error => console.warn('释放 PDF 课件失败', error))
@@ -71,18 +92,21 @@ function WorkspaceApp({ database, initial }: { database: IDBDatabase; initial: W
   const [workspaces, setWorkspaces] = useState(initial)
   const [viewKey, setViewKey] = useState(initial[0]?.id ?? 'new')
   const [preview, setPreview] = useState<DeckPreview | null>(null)
-  const [modal, setModal] = useState<'manage' | 'create' | null>(null)
+  const [creating, setCreating] = useState(false)
   const [showExample, setShowExample] = useState(false)
-  const [busy, setBusy] = useState<'import' | 'save' | null>(null)
+  const [busy, setBusy] = useState<WorkspaceOperation | null>(null)
   const [saveError, setSaveError] = useState('')
   const [loadError, setLoadError] = useState('')
+  const [switchError, setSwitchError] = useState('')
   const picker = useRef<HTMLInputElement>(null)
+  const workspaceTrigger = useRef<HTMLButtonElement>(null)
   const active = workspaces[0]
   const ppt = active?.ppt
   const currentPreview = preview?.pptId === ppt?.id ? preview : null
   const deck = currentPreview?.deck ?? null
   const restoring = Boolean(ppt && !currentPreview)
   const demo = !active && showExample
+  const name = active?.name ?? (demo ? '示例课件' : '期末 PPT 复习')
   const rawNotes = active?.notes ?? ''
   const notes = useMemo(() => demo ? demoNotes : rawNotes ? parseNotes(rawNotes) : undefined, [demo, rawNotes])
   const { slideCount, pages } = useMemo(() => {
@@ -110,14 +134,19 @@ function WorkspaceApp({ database, initial }: { database: IDBDatabase; initial: W
 
   useEffect(() => () => disposeDeck(preview?.deck), [preview])
 
-  function showModal(next: typeof modal) {
-    setSaveError('')
-    setModal(next)
+  function focusWorkspaceTrigger() {
+    requestAnimationFrame(() => workspaceTrigger.current?.focus({ preventScroll: true }))
   }
 
-  async function run(action: () => Promise<void>, message: string, operation: 'import' | 'save' = 'save') {
+  function showCreate(next: boolean) {
+    setSaveError('')
+    setCreating(next)
+    if (!next) focusWorkspaceTrigger()
+  }
+
+  async function run(action: () => Promise<void>, message: string, operation: WorkspaceOperation = 'save') {
     if (busy) return false
-    const reportError = operation === 'import' ? setLoadError : setSaveError
+    const reportError = { import: setLoadError, save: setSaveError, switch: setSwitchError }[operation]
     setBusy(operation)
     reportError('')
     try {
@@ -199,61 +228,68 @@ function WorkspaceApp({ database, initial }: { database: IDBDatabase; initial: W
     }, '无法保存讲解，请重试。')
   }
 
+  function switchWorkspace(id: string) {
+    void run(async () => {
+      activate(await updateWorkspace(database, id, { openedAt: openedAt() }))
+      focusWorkspaceTrigger()
+    }, '无法切换，请重试。', 'switch')
+  }
+
   return (
     <main className="study-app">
       <input ref={picker} type="file" accept=".pptx,.pdf" hidden onChange={importFile} />
       <StudyWorkspace
         key={demo ? 'demo' : viewKey}
-        name={active?.name ?? (demo ? '示例课件' : '期末 PPT 复习')}
-        workspaceActions={<>
-          <button type="button" className="btn btn-link" disabled={Boolean(busy)} onClick={() => showModal('manage')}><Icon name="folder" />管理工作区</button>
-          <button type="button" className="btn btn-link" disabled={Boolean(busy)} onClick={() => showModal('create')}><Icon name="plus" />新建工作区</button>
+        workspaceTitle={<>
+          <h1><button ref={workspaceTrigger} type="button" className="workspace-trigger" title={name} popoverTarget="workspace-switcher" disabled={Boolean(busy)}>
+            <span>{name}</span><Icon name="down" />
+          </button></h1>
+          <div id="workspace-switcher" className="workspace-popover" popover="auto" onBeforeToggle={event => {
+            if (event.newState === 'open') setSwitchError('')
+          }}>
+            {workspaces.length ? <ul className="workspace-list">
+              {workspaces.map((workspace, index) => (
+                <li key={workspace.id}>
+                  <button type="button" className="workspace-option" title={workspace.name} disabled={Boolean(busy)}
+                    aria-current={index === 0 ? 'true' : undefined}
+                    popoverTarget={index === 0 ? 'workspace-switcher' : undefined} popoverTargetAction="hide"
+                    onClick={index === 0 ? undefined : () => switchWorkspace(workspace.id)}>
+                    <span>{workspace.name}</span>{index === 0 ? <Icon name="check" /> : null}
+                  </button>
+                </li>
+              ))}
+            </ul> : <button type="button" className="workspace-option" disabled={Boolean(busy)} onClick={() => {
+              setShowExample(!demo)
+              focusWorkspaceTrigger()
+            }}>{demo ? '期末 PPT 复习' : '示例课件'}</button>}
+            <div className="workspace-popover-footer">
+              <button type="button" className="workspace-option workspace-new" popoverTarget="workspace-switcher" popoverTargetAction="hide" disabled={Boolean(busy)} onClick={() => showCreate(true)}><Icon name="plus" />新建</button>
+            </div>
+            {switchError ? <p className="workspace-switch-error" role="alert">{switchError}</p> : null}
+          </div>
         </>}
         deck={deck} fileName={ppt?.file.name} notes={notes} rawNotes={rawNotes} pages={pages} slideCount={slideCount}
         demo={demo} restoring={restoring} importing={importing} busy={Boolean(busy)}
-        loadError={loadError || currentPreview?.error || ''} saveError={modal ? '' : saveError}
+        loadError={loadError || currentPreview?.error || ''} saveError={creating ? '' : saveError}
         onChooseFile={() => picker.current?.click()} onSaveNotes={saveNotes} clearSaveError={() => setSaveError('')}
       />
-      {modal === 'create' ? (
-        <Dialog title="新建工作区" description="每个工作区保存一份课件和对应的 AI 讲解。" busy={Boolean(busy)} onClose={() => showModal(null)}>
-          <WorkspaceNameForm label="创建工作区" busy={Boolean(busy)} error={saveError} onSubmit={name => run(async () => {
+      {creating ? (
+        <CreateWorkspaceDialog busy={Boolean(busy)} error={saveError} onClose={() => showCreate(false)}
+          onSubmit={name => void run(async () => {
             await create(name)
-            showModal(null)
-          }, '无法创建工作区，请重试。')} />
-        </Dialog>
-      ) : null}
-      {modal === 'manage' ? (
-        <WorkspaceManager workspaces={workspaces} busy={Boolean(busy)} error={saveError} clearError={() => setSaveError('')} onClose={() => showModal(null)} onCreate={() => showModal('create')}
-          exampleOpen={demo} onToggleExample={() => {
-            setShowExample(!demo)
-            showModal(null)
-          }}
-          onOpen={id => run(async () => {
-            activate(await updateWorkspace(database, id, { openedAt: openedAt() }))
-            showModal(null)
-          }, '无法打开工作区，请重试。')}
-          onRename={(id, name) => run(() => update(id, { name }), '无法重命名工作区，请重试。')}
-          onDelete={id => run(async () => {
-            await deleteWorkspace(database, id)
-            setWorkspaces(rows => rows.filter(row => row.id !== id))
-            if (id === active?.id) {
-              setViewKey(workspaces[1]?.id ?? crypto.randomUUID())
-              setPreview(null)
-              setLoadError('')
-            }
-          }, '无法删除工作区，请重试。')} />
+            showCreate(false)
+          }, '无法创建，请重试。')} />
       ) : null}
     </main>
   )
 }
 
 function StudyWorkspace({
-  name, workspaceActions,
+  workspaceTitle,
   deck, fileName, notes, rawNotes, pages, slideCount, demo, restoring, importing, busy, loadError, saveError,
   onChooseFile, onSaveNotes, clearSaveError,
 }: {
-  name: string
-  workspaceActions: ReactNode
+  workspaceTitle: ReactNode
   deck: Deck | null
   fileName?: string
   notes: ReadonlyMap<number, Note> | undefined
@@ -299,15 +335,17 @@ function StudyWorkspace({
   const matchStatus = useMemo(() => notes ? describeMatch(notes, slideCount) : '', [notes, slideCount])
 
   const turnPageWithArrow = useEffectEvent((event: globalThis.KeyboardEvent) => {
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') {
+    const previous = event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+    const next = event.key === 'ArrowRight' || event.key === 'ArrowDown'
+    if (!previous && !next) {
       if (pagingWithArrows) setPagingWithArrows(false)
       return
     }
     if (editing || !pages.length || event.defaultPrevented || event.isComposing) return
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
-    if (event.target instanceof Element && event.target.closest('input, textarea, dialog')) return
+    if (event.target instanceof Element && event.target.closest('input, select, textarea, dialog, .workspace-current')) return
 
-    const step = event.key === 'ArrowUp' ? -1 : 1
+    const step = previous ? -1 : 1
     const page = pages[pages.indexOf(current) + step]
     event.preventDefault()
     setPagingWithArrows(true)
@@ -338,7 +376,7 @@ function StudyWorkspace({
         // 阅读区变高时，浏览器可能将滚动位置限制在新的底部。
         if (top < previous.top && maxTop < previous.maxTop && Math.abs(top - maxTop) < 1) return
         if (top <= 0 || top < previous.top) setToolbarVisibility('shown')
-        else if (top > Math.max(24, previous.top) && !toolbar.current?.matches(':is(:focus-visible, :has(:focus-visible))')) setToolbarVisibility('hidden')
+        else if (top > Math.max(24, previous.top) && !toolbar.current?.matches(':is(:focus-visible, :has(:focus-visible, :popover-open))')) setToolbarVisibility('hidden')
       },
       onWheel: (event: React.WheelEvent<HTMLElement>) => {
         if (event.ctrlKey || !event.deltaY) return
@@ -407,15 +445,12 @@ function StudyWorkspace({
         <header ref={toolbar} className="workspace-toolbar" id="workspace-toolbar" tabIndex={-1} inert={toolbarHidden} onFocus={event => {
           if (toolbarVisibility === 'hovered' && event.target.matches(':focus-visible')) setToolbarVisibility('shown')
         }}>
-          <div className="workspace-current">
-            <h1 title={name}>{name}</h1>
-            {fileName ? <span className="workspace-file" title={fileName}>{fileName}</span> : null}
-          </div>
+          <div className="workspace-current" onClick={() => setToolbarVisibility('shown')}>{workspaceTitle}</div>
           {pages.length > 0 ? <PageNav pages={pages} current={current} onSelect={select} /> : null}
           <div className="toolbar-actions">
-            {workspaceActions}
             {fileName ? <button type="button" className="btn btn-link" disabled={busy} onClick={onChooseFile} title={fileName}>{importing ? '导入中…' : '更换课件'}</button> : null}
             {reading && !demo ? <button ref={editButton} type="button" className="btn btn-link" disabled={busy} onClick={() => setEditing(true)}><Icon name="edit" />编辑讲解</button> : null}
+            <ThemeSelect />
           </div>
           {matchStatus ? <p className="match-status status-text" role="status">{matchStatus}</p> : null}
         </header>
@@ -482,126 +517,59 @@ const NotePage = memo(function NotePage({ page, note, active }: { page: number; 
 function PageNav({ pages, current, onSelect }: { pages: number[]; current: number; onSelect: (page: number) => void }) {
   const [draft, setDraft] = useState<string | null>(null)
   const index = pages.indexOf(current)
+
+  function clearPointerFocus(event: MouseEvent<HTMLButtonElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+  }
+
   return (
     <nav className="page-nav" aria-label="翻页">
-      <button type="button" aria-label="上一页" aria-keyshortcuts="ArrowUp" title="上一页" disabled={index <= 0} onClick={() => onSelect(pages[index - 1])}><Icon name="left" /></button>
+      <button type="button" aria-label="上一页" aria-keyshortcuts="ArrowLeft ArrowUp" title="上一页" disabled={index <= 0}
+        onMouseDown={clearPointerFocus} onClick={() => onSelect(pages[index - 1])}><Icon name="left" /></button>
       <label className="page-jump"><span className="sr-only">跳转页码</span><input id="page-current" type="number" min={pages[0] ?? 1} max={pages.at(-1) ?? 1} inputMode="numeric" autoComplete="off" value={draft ?? (current || '')} disabled={!pages.length} onChange={event => setDraft(event.target.value)} onBlur={() => {
         if (draft !== null) onSelect(Number(draft))
         setDraft(null)
       }} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }} /></label>
       <span className="page-total">/ {pages.at(-1) ?? 0}</span>
-      <button type="button" aria-label="下一页" aria-keyshortcuts="ArrowDown" title="下一页" disabled={index < 0 || index === pages.length - 1} onClick={() => onSelect(pages[index + 1])}><Icon name="right" /></button>
+      <button type="button" aria-label="下一页" aria-keyshortcuts="ArrowRight ArrowDown" title="下一页" disabled={index < 0 || index === pages.length - 1}
+        onMouseDown={clearPointerFocus} onClick={() => onSelect(pages[index + 1])}><Icon name="right" /></button>
     </nav>
   )
 }
 
-function Dialog({ title, description, busy = false, onClose, children }: { title: string; description?: ReactNode; busy?: boolean; onClose: () => void; children: ReactNode }) {
+function CreateWorkspaceDialog({ error, busy, onClose, onSubmit }: {
+  error: string
+  busy: boolean
+  onClose: () => void
+  onSubmit: (name: string) => void
+}) {
   const dialog = useRef<HTMLDialogElement>(null)
-  useLayoutEffect(() => { dialog.current?.showModal() }, [])
+  const nameInput = useRef<HTMLInputElement>(null)
+  const [name, setName] = useState('')
+  const trimmedName = name.trim()
+
+  useLayoutEffect(() => {
+    dialog.current!.showModal()
+    nameInput.current!.focus()
+  }, [])
+
   return (
     <dialog ref={dialog} aria-labelledby="dialog-title" onClose={onClose} onCancel={event => { if (busy) event.preventDefault() }}>
-      <div className="dialog-head"><div><h2 id="dialog-title">{title}</h2>{description ? <p>{description}</p> : null}</div><button type="button" className="icon-btn" aria-label="关闭" disabled={busy} onClick={onClose}><Icon name="close" /></button></div>
-      {children}
-    </dialog>
-  )
-}
-
-function WorkspaceNameForm({ initial = '', label, error, busy, onSubmit, onCancel }: {
-  initial?: string
-  label: string
-  error: string
-  busy: boolean
-  onSubmit: (name: string) => Promise<boolean>
-  onCancel?: () => void
-}) {
-  const [name, setName] = useState(initial)
-
-  return (
-    <form className="workspace-name-form" onSubmit={event => {
-      event.preventDefault()
-      if (name.trim() && !busy) void onSubmit(name.trim())
-    }}>
-      <label htmlFor="workspace-name">工作区名称</label>
-      <input id="workspace-name" autoFocus autoComplete="off" required maxLength={80} value={name} disabled={busy} onChange={event => setName(event.target.value)} />
-      <div className="dialog-foot">
-        <span className="dialog-error" role="alert">{error}</span>
-        <div className="workspace-actions">
-          {onCancel ? <button type="button" className="btn btn-secondary" disabled={busy} onClick={onCancel}>取消</button> : null}
-          <button type="submit" className="btn btn-primary" disabled={busy || !name.trim()}>{label}</button>
+      <div className="dialog-head"><h2 id="dialog-title">新建</h2><button type="button" className="icon-btn" aria-label="关闭" disabled={busy} onClick={onClose}><Icon name="close" /></button></div>
+      <form className="workspace-name-form" onSubmit={event => {
+        event.preventDefault()
+        if (trimmedName && !busy) onSubmit(trimmedName)
+      }}>
+        <label htmlFor="workspace-name">名称</label>
+        <input ref={nameInput} id="workspace-name" autoComplete="off" required maxLength={80} value={name} disabled={busy} onChange={event => setName(event.target.value)} />
+        <div className="dialog-foot">
+          <span className="dialog-error" role="alert">{error}</span>
+          <button type="submit" className="btn btn-primary" disabled={busy || !trimmedName}>创建</button>
         </div>
-      </div>
-    </form>
-  )
-}
-
-function WorkspaceManager({ workspaces, busy, error, clearError, onClose, onCreate, exampleOpen, onToggleExample, onOpen, onRename, onDelete }: {
-  workspaces: Workspace[]
-  busy: boolean
-  error: string
-  clearError: () => void
-  onClose: () => void
-  onCreate: () => void
-  exampleOpen: boolean
-  onToggleExample: () => void
-  onOpen: (id: string) => Promise<boolean>
-  onRename: (id: string, name: string) => Promise<boolean>
-  onDelete: (id: string) => Promise<boolean>
-}) {
-  const [editing, setEditing] = useState<{ action: 'rename' | 'delete'; workspace: Workspace } | null>(null)
-
-  function edit(next: typeof editing) {
-    clearError()
-    setEditing(next)
-  }
-
-  return (
-    <Dialog title={editing?.action === 'rename' ? '重命名工作区' : editing ? '删除工作区' : '管理工作区'} busy={busy} onClose={onClose}>
-      {editing?.action === 'rename' ? (
-        <WorkspaceNameForm initial={editing.workspace.name} label="保存名称" busy={busy} error={error} onCancel={() => edit(null)} onSubmit={async name => {
-          const saved = await onRename(editing.workspace.id, name)
-          if (saved) edit(null)
-          return saved
-        }} />
-      ) : editing ? (
-        <>
-          <p className="workspace-confirm">确定删除「{editing.workspace.name}」？该工作区保存的课件和讲解也会被删除。</p>
-          <div className="dialog-foot">
-            <span className="dialog-error" role="alert">{error}</span>
-            <div className="workspace-actions">
-              <button type="button" className="btn btn-secondary" autoFocus disabled={busy} onClick={() => edit(null)}>取消</button>
-              <button type="button" className="btn btn-danger" disabled={busy} onClick={async () => { if (await onDelete(editing.workspace.id)) edit(null) }}>确认删除</button>
-            </div>
-          </div>
-        </>
-      ) : (
-        <>
-          {workspaces.length ? (
-            <ul className="workspace-list">
-              {workspaces.map((workspace, index) => (
-                <li key={workspace.id}>
-                  <div className="workspace-summary">
-                    <div><strong>{workspace.name}</strong>{index === 0 ? <span className="workspace-active">当前</span> : null}</div>
-                    <span title={workspace.ppt?.file.name}>{workspace.ppt?.file.name ?? '尚未导入课件'}</span>
-                  </div>
-                  <div className="workspace-actions">
-                    {index !== 0 ? <button type="button" className="btn btn-secondary" aria-label={`打开 ${workspace.name}`} disabled={busy} onClick={() => void onOpen(workspace.id)}>打开</button> : null}
-                    <button type="button" className="btn btn-secondary" aria-label={`重命名 ${workspace.name}`} disabled={busy} onClick={() => edit({ action: 'rename', workspace })}>重命名</button>
-                    <button type="button" className="btn workspace-delete" aria-label={`删除 ${workspace.name}`} disabled={busy} onClick={() => edit({ action: 'delete', workspace })}>删除</button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : <p className="workspace-list-empty">还没有工作区。新建后即可导入课件和讲解。</p>}
-          <div className="dialog-foot">
-            <span className="dialog-error" role="alert">{error}</span>
-            <div className="workspace-actions">
-              {!workspaces.length ? <button type="button" className="btn btn-link" disabled={busy} onClick={onToggleExample}>{exampleOpen ? '返回空白工作区' : '查看示例'}</button> : null}
-              <button type="button" className="btn btn-primary" disabled={busy} onClick={onCreate}><Icon name="plus" />新建工作区</button>
-            </div>
-          </div>
-        </>
-      )}
-    </Dialog>
+      </form>
+    </dialog>
   )
 }
 

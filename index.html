@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; media-src data: blob:; font-src 'self' data: blob:; connect-src 'self' data: blob: ws://localhost:* ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      try {
+        const theme = localStorage.getItem('ppt-study:theme')
+        if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme
+      } catch (error) {
+        console.warn('无法读取主题偏好', error)
+      }
+    </script>
     <link rel="icon" href="data:," />
     <title>期末 PPT 复习</title>
   </head>

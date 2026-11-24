@@ -57,9 +57,3 @@ export async function updateWorkspace(database: IDBDatabase, id: string, changes
   if (!updated) throw new Error('工作区已被删除')
   return updated
 }
-
-export async function deleteWorkspace(database: IDBDatabase, id: string) {
-  const { store, done } = writeTransaction(database)
-  store.delete(id)
-  await done
-}
