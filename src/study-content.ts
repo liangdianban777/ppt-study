@@ -85,6 +85,23 @@ export const examples: Example[] = [
 const mathOptions = { output: 'mathml', throwOnError: false } as const
 const dollarMath = markedKatex({ ...mathOptions, nonStandard: true })
 
+// 复制出的讲解可能会转义列表行首的连字符。
+const escapedList: MarkedExtension = {
+  extensions: [{
+    name: 'escapedList',
+    level: 'block',
+    start: source => source.search(/\n {0,3}\\-[ \t]+\S/u),
+    tokenizer(source) {
+      const match = /^ {0,3}\\-[ \t]+\S[^\n]*(?:\n(?:[ \t]*\n)* {0,3}\\-[ \t]+\S[^\n]*)*/u.exec(source)
+      if (!match) return
+
+      const raw = match[0]
+      const [list] = this.lexer.blockTokens(raw.replace(/^( {0,3})\\-/gmu, '$1+'))
+      return { ...list, raw }
+    },
+  }],
+}
+
 // 兼容 Markdown 中原样粘贴的 TeX 定界符和带转义的定界符。
 const texDelimiters = [
   {
@@ -133,7 +150,7 @@ const texMath: MarkedExtension = {
 }
 
 function noteMarkdown(page: number) {
-  return new Marked({ gfm: true }, dollarMath, texMath, markedFootnote({
+  return new Marked({ gfm: true }, escapedList, dollarMath, texMath, markedFootnote({
     prefixId: `note-${page}-footnote-`,
     description: '脚注',
     backRefLabel: '返回脚注引用',

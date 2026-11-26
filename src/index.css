@@ -40,7 +40,8 @@ body { margin: 0; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; }
-:is(button, input, select, textarea, .scroll-pane):focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+:is(button, [role='button']):focus { outline: none; }
+:is(input, select, textarea, .scroll-pane):focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 svg.icon { display: block; width: 1.1em; height: 1.1em; flex: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .startup { padding: 24px clamp(16px, 3vw, 42px); }
@@ -92,7 +93,6 @@ svg.icon { display: block; width: 1.1em; height: 1.1em; flex: none; }
 .workspace-list { max-height: 50dvh; overflow-y: auto; overscroll-behavior: contain; margin: 0; padding: 0; list-style: none; }
 .workspace-option { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font-size: 14px; text-align: left; }
 .workspace-option:hover:enabled, .workspace-option[aria-current] { background: var(--visual-surface); }
-.workspace-option:focus-visible { outline-offset: -2px; }
 .workspace-option[aria-current] .icon { margin-inline-start: auto; color: var(--primary); }
 .workspace-popover-footer { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
 .workspace-new { color: var(--primary); }
